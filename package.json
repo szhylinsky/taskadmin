@@ -1,0 +1,14 @@
+{
+  "name": "taskadmin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Client-side task list: create and list tasks, stored in localStorage.",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node scripts/serve.js",
+    "test": "node --test"
+  }
+}
