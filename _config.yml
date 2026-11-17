@@ -1,0 +1,17 @@
+# GitHub Pages / Jekyll configuration.
+#
+# This repository is a plain static site: index.html, styles.css and js/.
+# Everything else is development material and must stay out of the Jekyll
+# build. In particular specs/start/spec.md contains JSDoc type annotations
+# such as {{ ok: true, title: string }} which Liquid parses as a tag and
+# fails on ("Variable ... was not properly terminated").
+title: TaskAdmin
+exclude:
+  - agents.md
+  - specs
+  - test
+  - scripts
+  - opencode.json
+  - package.json
+  - package-lock.json
+  - node_modules

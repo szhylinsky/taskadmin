@@ -1,3 +1,6 @@
 node_modules/
 .DS_Store
 *.log
+# GitHub Pages / Jekyll build output
+_site/
+.jekyll-cache/
