@@ -1,9 +1,9 @@
 # Technical Specification & Implementation Plan — TaskAdmin
 
 **Source of truth:** [`specs/start/taskadmin.feature`](./taskadmin.feature)
-**Status:** Draft v1
+**Status:** Draft v2
 
-**Scope decision:** Only **create** and **list** tasks. The feature narrative says "manage my tasks", but editing, completing, and deleting are explicitly **out of scope** for this iteration.
+**Scope decision:** **Create**, **list**, and **delete** tasks. The feature narrative says "manage my tasks", but editing, completing, and reordering are explicitly **out of scope** for this iteration.
 
 **Architecture decision:** 100% client-side. Static HTML, CSS, and ES modules, no application server, no framework, no build step, no npm dependencies. Tasks persist in the browser's `localStorage`.
 
@@ -11,7 +11,7 @@
 
 ## 1. Overview
 
-TaskAdmin is a single-page web app for keeping a personal list of tasks. The user types a title, submits the form, and the task appears immediately in the list below. All state lives in the browser: the app is a set of static files that can be opened from any static host — or from a local static file server during development.
+TaskAdmin is a single-page web app for keeping a personal list of tasks. The user types a title, submits the form, and the task appears immediately in the list below. Each row has a Delete button; removing a task updates the list immediately and persists the result. All state lives in the browser: the app is a set of static files that can be opened from any static host — or from a local static file server during development.
 
 ### 1.1 Goals
 
@@ -19,14 +19,15 @@ TaskAdmin is a single-page web app for keeping a personal list of tasks. The use
 | --- | --- |
 | Create a task with a title | Scenario 1 |
 | List all tasks | Scenario 2 |
+| Delete a task | Scenarios 3–5 |
 | Zero infrastructure | No backend, no database, no accounts, no build step |
 | Trivially auditable | Four small source files, all readable in one sitting |
-| Data survives reload | `localStorage` persistence |
+| Data survives reload | `localStorage` persistence, including deletions |
 | Testable without a browser | Domain + persistence logic isolated behind a storage port |
 
 ### 1.2 Non-goals
 
-- Editing, deleting, completing, or reordering tasks
+- Editing, completing, or reordering tasks
 - Due dates, priorities, tags, attachments, reminders
 - Multi-user support, accounts, sync across devices or browsers
 - Search, filtering, pagination, sort controls
@@ -54,7 +55,8 @@ These are accepted trade-offs, not defects:
 | ID | Use case | Trigger |
 | --- | --- | --- |
 | UC-1 | Add a task | Type a title, press "Add task" (or Enter) |
-| UC-2 | See all tasks | Page load, or immediately after adding |
+| UC-2 | See all tasks | Page load, or immediately after adding or deleting |
+| UC-3 | Delete a task | Press the task's "Delete" button (or Enter/Space when focused) |
 
 ---
 
@@ -74,6 +76,11 @@ These are accepted trade-offs, not defects:
 | FR-10 | If stored data is missing, malformed, or not an array, the app MUST render the empty state with a warning and MUST NOT overwrite that data until the next successful create. | Corrupt payload → warning + empty list; payload untouched |
 | FR-11 | Every task title MUST be rendered as text, never as markup. | A title of `<img src=x onerror=alert(1)>` displays literally |
 | FR-12 | The app MUST work with JavaScript only — no network requests at runtime. | Network tab shows only the app's own files |
+| FR-13 | The app MUST delete a task by its unique id and persist the result; a stale or invalid id MUST be a no-op. | Remaining tasks render immediately and storage no longer contains the task |
+| FR-14 | Deleting one of several tasks with identical titles MUST remove exactly one task. | Two "Buy groceries" tasks → one remains |
+| FR-15 | After deleting the last task, the app MUST show the empty state and an empty `<ul>`. | "No tasks yet." visible, list has no children |
+| FR-16 | A deletion MUST survive a reload. | Reload → deleted task stays gone |
+| FR-17 | Each task row MUST expose a Delete control with an accessible name that includes the task title. | Button reachable by keyboard; name reads "Delete task: Buy groceries" |
 
 ---
 
@@ -89,7 +96,8 @@ These are accepted trade-offs, not defects:
 │              │                               │
 │              ├── js/task-store.js            │
 │              │     pure domain:              │
-│              │     validate · create · list  │
+│              │     validate · create ·       │
+│              │     list · delete             │
 │              │                               │
 │              └── js/storage.js               │
 │                    localStorage adapter      │
@@ -103,9 +111,9 @@ These are accepted trade-offs, not defects:
 
 ### 4.1 Layering rules
 
-1. **`task-store.js` — domain, no DOM, no `localStorage`.** Exposes `createTask`, `listTasks`, and persistence orchestration through an injected `storage` port. This is what automated tests exercise.
-2. **`storage.js` — the browser adapter.** Wraps `localStorage` behind `read()`, `write(tasks)`, `clear()`, and swallows nothing silently: parse failures are reported as a result, not thrown at the UI.
-3. **`app.js` — the only DOM-aware module.** Reads elements, wires events, calls the store, renders. Contains no validation rules and no storage keys.
+1. **`task-store.js` — domain, no DOM, no `localStorage`.** Exposes `createTask`, `listTasks`, `deleteTask`, and persistence orchestration through an injected `storage` port. This is what automated tests exercise.
+2. **`storage.js` — the browser adapter.** Wraps `localStorage` behind `read()`, `write(tasks)`, `clear()`, and swallows nothing silently: parse failures are reported as a result, not thrown at the UI. Deletion reuses `write()` with the filtered array, so the port contract is unchanged.
+3. **`app.js` — the only DOM-aware module.** Reads elements, wires create and delete events, calls the store, renders. Contains no validation rules, no deletion semantics, and no storage keys.
 4. Tests inject a fake storage object, so domain behaviour is fully testable in Node with no browser emulation.
 
 ### 4.2 Storage key and payload
@@ -136,6 +144,8 @@ Evergreen Chrome, Firefox, Safari, and Edge (last 2 versions). Requires ES modul
   "createdAt": "2026-11-13T09:14:22.481Z"
 }
 ```
+
+Tasks are deleted by `id`, never by `title`: titles are not unique (FR-7, FR-14).
 
 ### 5.2 Invariants enforced on read
 
@@ -170,6 +180,12 @@ export function createTask(storage, rawTitle, now = () => new Date()); // → Ta
 /** @returns {{ tasks: Task[], corrupt: boolean }} */
 export function listTasks(storage);
 
+/**
+ * Removes the task with the given id and persists the remaining tasks.
+ * @returns {{ removed: boolean, tasks: Task[] }}
+ */
+export function deleteTask(storage, id);
+
 /** Test/dev helper: removes all stored tasks. @returns {void} */
 export function clearTasks(storage);
 ```
@@ -180,6 +196,9 @@ Behaviour details:
 - `createTask` validates first and throws a `ValidationError` (exported) for invalid input — so invalid input can never reach storage.
 - `createTask` prepends the new task (newest first) rather than relying only on sort order.
 - `buildTask` exists so the UI can still show a task created while storage is unavailable, without duplicating id/timestamp logic in `app.js`.
+- `deleteTask` matches on `id` only and removes at most one task, so duplicate titles are unaffected beyond the selected row. It returns the remaining list so the UI can render without a second read.
+- `deleteTask` accepts only a non-empty string `id`. A non-string, empty, or non-matching id removes nothing: `removed === false` and `storage.write` is not called.
+- `deleteTask` reuses the existing `write` port with the filtered array; no new storage method is needed.
 - `clearTasks` exists so tests and a future "reset" affordance have one explicit path; the UI does not expose it in v1.
 
 ### 6.2 `js/storage.js`
@@ -189,7 +208,7 @@ Behaviour details:
 export function createLocalStoragePort(storageArea = globalThis.localStorage);
 ```
 
-`read()` returns `null` when the key is missing and never throws. `write()` and `clear()` propagate `QuotaExceededError` and `SecurityError` (private-mode / disabled storage); `app.js` catches these and shows a non-blocking warning, since the in-memory list still works for the session.
+`read()` returns `null` when the key is missing and never throws. `write()` and `clear()` propagate `QuotaExceededError` and `SecurityError` (private-mode / disabled storage); `app.js` catches these and shows a non-blocking warning, since the in-memory list still works for the session. Deletion uses `write()` with the filtered array, so the port contract is unchanged.
 
 ### 6.3 `js/app.js`
 
@@ -198,10 +217,11 @@ Responsibilities, in order:
 1. `DOMContentLoaded` → `listTasks(port)` → `render(tasks, { corrupt })`.
 2. `submit` on the form → `preventDefault()` → `validateTitle` → on failure show `#form-error` and return.
 3. On success → `createTask(port, value)` → `render` with the updated list → clear input → refocus input.
-4. Catch `QuotaExceededError` / `SecurityError` → show "Tasks can't be saved in this browser session" in `#storage-warning` but still render the task in memory via `buildTask`.
-5. Export nothing; runs as a side-effecting entry module.
+4. `click` delegated on `#task-list` → find the closest `button[data-id]` → `deleteTask(port, id)` → `render` with the returned list. Buttons carry only the task id; no inline handlers.
+5. Catch `QuotaExceededError` / `SecurityError` → show "Tasks can't be saved in this browser session" in `#storage-warning` and render the in-memory result anyway: the new task via `buildTask` on create, or the list without the deleted task on delete. The warning makes clear that changes may be lost on reload.
+6. Export nothing; runs as a side-effecting entry module.
 
-`render(tasks, flags)` is a pure function that rebuilds the `<ul>` from scratch using `document.createElement` and `textContent` (FR-11). No `innerHTML` with data, no inline handlers, no template strings containing user input.
+`render(tasks, flags)` is a pure function that rebuilds the `<ul>` from scratch using `document.createElement` and `textContent` (FR-11). No `innerHTML` with data, no inline handlers, no template strings containing user input. Each `<li>` contains the title as a text node plus a `type="button"` Delete button whose `data-id` holds the task id and whose `aria-label` includes the title (FR-17). `render` presents the current list; it does not decide deletion semantics.
 
 ---
 
@@ -247,16 +267,29 @@ Responsibilities, in order:
 
 `novalidate` is deliberate: the app owns validation so behaviour is identical across browsers and testable in isolation. `maxlength="200"` remains as a soft guard.
 
+Task rows are produced by `render()`, not present in the static HTML:
+
+```html
+<li data-id="0f7c1f8e-…">
+  <span class="task-title">Buy groceries</span>
+  <button type="button" class="delete-task" data-id="0f7c1f8e-…"
+          aria-label="Delete task: Buy groceries">Delete</button>
+</li>
+```
+
+The id is never shown as text and is never derived from the title.
+
 ### 7.2 Styling (`styles.css`)
 
 - One stylesheet, system font stack, CSS custom properties for colour and spacing.
 - Responsive from 320 px up; long titles wrap with `overflow-wrap: anywhere`.
 - `:focus-visible` outline on input and button; error text meets WCAG AA contrast.
+- Task rows lay out title and Delete button on one line where space allows, stacking at narrow widths; the Delete button has a distinct hover/focus danger treatment that still meets AA contrast.
 - No frameworks, no web fonts, no external requests (consistent with the CSP and FR-12).
 
 ### 7.3 Accessibility
 
-Semantic `<header>`, `<main>`, `<section>`, `<form>` with a visible `<label>`, `<ul>`/`<li>` for tasks, `role="alert"` for the error region, and a logical tab order. Full flow is keyboard operable: type → Tab → Enter → focus returns to the input (FR-8).
+Semantic `<header>`, `<main>`, `<section>`, `<form>` with a visible `<label>`, `<ul>`/`<li>` for tasks, `role="alert"` for the error region, and a logical tab order. Full flow is keyboard operable: type → Tab → Enter → focus returns to the input (FR-8). Deletion is keyboard operable too: Tab to a row's Delete button, then Enter or Space. Each button has an accessible name containing the task title (FR-17), and after removal focus moves to the next task's Delete button, or to the title input when the list becomes empty.
 
 ---
 
@@ -311,8 +344,9 @@ The domain is pure and storage is injected, so the Gherkin scenarios run in Node
 | --- | --- | --- |
 | Unit — validation | `test/task-store.test.js` | trim, 1/200/201 boundaries, empty, whitespace-only, non-string |
 | Unit — domain | `test/task-store.test.js` | id uniqueness, timestamp shape, newest-first, duplicates allowed |
-| Unit — persistence | `test/task-store.test.js` | write on create, read round-trip, absent key, corrupt JSON, non-array payload, dropped invalid entries, clear |
-| Scenario | `test/task-store.test.js` | both Gherkin scenarios at the store boundary |
+| Unit — deletion | `test/task-store.test.js` | delete by id, duplicate titles, last task, stale/invalid id, persistence after reload |
+| Unit — persistence | `test/task-store.test.js` | write on create/delete, read round-trip, absent key, corrupt JSON, non-array payload, dropped invalid entries, clear |
+| Scenario | `test/task-store.test.js` | all five Gherkin scenarios at the store boundary |
 | Manual | §9.2 checklist | DOM wiring, styling, a11y, persistence across reload |
 
 Fake port used by every test:
@@ -348,7 +382,33 @@ function fakeStorage(initial = null) {
 | `Then the user should see 2 tasks` | `assert.equal(tasks.length, 2)` |
 | `And the tasks should include "Buy groceries" and "Read a book"` | order-independent membership check on titles |
 
-Both tests are named to mirror the scenario text so failures are readable in the runner output.
+**Scenario 3 — Delete a task**
+
+| Gherkin step | Test action |
+| --- | --- |
+| `Given the user has the following tasks:` (table) | `fakeStorage()`, then one `createTask` per row |
+| `When the user deletes the task "Buy groceries"` | capture its `id` from `listTasks`, then `deleteTask(storage, id)` |
+| `Then the task "Buy groceries" should no longer be in the task list` | `listTasks(storage).tasks` has no entry titled `"Buy groceries"` |
+| `And the task list should contain only "Read a book"` | remaining titles deep-equal `['Read a book']`; storage payload matches |
+
+**Scenario 4 — Delete one of several tasks with the same title**
+
+| Gherkin step | Test action |
+| --- | --- |
+| `Given the user has the following tasks:` (duplicate rows) | two `createTask` calls with the same title |
+| `When the user deletes one of the "Buy groceries" tasks` | `deleteTask(storage, firstTask.id)` |
+| `Then the task list should contain exactly 1 task titled "Buy groceries"` | `removed === true`, one task remains, and its id differs from the deleted id |
+
+**Scenario 5 — Delete the last task**
+
+| Gherkin step | Test action |
+| --- | --- |
+| `Given the user has the following tasks:` (one row) | one `createTask` |
+| `When the user deletes the task "Buy groceries"` | `deleteTask(storage, id)` |
+| `Then the user should see 0 tasks` | `listTasks(storage).tasks` is empty |
+| `And the empty state should be shown` | UI assertion in the §9.2 manual checklist — the store has no DOM |
+
+All tests are named to mirror the scenario text so failures are readable in the runner output.
 
 ### 9.2 Manual acceptance checklist
 
@@ -362,12 +422,17 @@ Both tests are named to mirror the scenario text so failures are readable in the
 8. Resize to 320 px → layout intact, no horizontal scroll.
 9. Tab and Enter only → full flow works, focus always visible.
 10. Disable storage (private mode) → app still usable in-session, warning shown.
+11. Add two tasks → press "Delete" on one → only that row disappears, the other stays.
+12. Add two tasks with the same title → delete one → exactly one row remains.
+13. Refresh after a delete → the deleted task does not reappear.
+14. Delete the only remaining task → empty state appears, `<ul>` has no children.
+15. Delete via keyboard (Tab to button, then Enter and Space) → focus moves to the next task or the title input.
 
 ---
 
 ## 10. Implementation Plan
 
-Five checkpoints, each independently verifiable. Estimated total: **3–4 hours**.
+Five checkpoints, each independently verifiable. Estimated total: **4–5 hours**.
 
 ### Checkpoint 1 — Skeleton (25 min)
 
@@ -378,34 +443,34 @@ Five checkpoints, each independently verifiable. Estimated total: **3–4 hours*
 
 ### Checkpoint 2 — Domain + persistence (75 min)
 
-- `js/task-store.js`: `MAX_TITLE_LENGTH`, `validateTitle`, `ValidationError`, `createTask`, `listTasks`, `clearTasks`
+- `js/task-store.js`: `MAX_TITLE_LENGTH`, `validateTitle`, `ValidationError`, `createTask`, `listTasks`, `deleteTask`, `clearTasks`
 - `js/storage.js`: `createLocalStoragePort`, safe `read`, throwing `write`/`clear`, key constant
-- `test/task-store.test.js`: fake storage + all unit and scenario cases from §9
-- **Exit:** full suite green; `task-store.js` imports nothing from `storage.js` and references no globals beyond `crypto`/`Date`
+- `test/task-store.test.js`: fake storage + all unit and scenario cases from §9, including all three delete scenarios
+- **Exit:** full suite green; deletion is id-based and `task-store.js` imports nothing from `storage.js` and references no globals beyond `crypto`/`Date`
 
 ### Checkpoint 3 — UI wiring (75 min)
 
-- `js/app.js`: load → render, submit handler, validation display, input clearing + refocus, storage-error fallback
-- `render()` with `createElement`/`textContent` only
-- **Exit:** §9.2 steps 1–5 and 7 pass by hand
+- `js/app.js`: load → render, submit handler, validation display, input clearing + refocus, delegated delete handler, storage-error fallback
+- `render()` with `createElement`/`textContent` only; each row gets a Delete button with `data-id` and an accessible label
+- **Exit:** §9.2 steps 1–5, 7, and 11–15 pass by hand
 
 ### Checkpoint 4 — Styling + accessibility (45 min)
 
-- `styles.css`: layout, tokens, responsive, focus states, error styling, empty state
-- Pass over headings, labels, landmarks, `aria-describedby`, `role="alert"`
-- **Exit:** §9.2 steps 8–9 pass; axe DevTools reports no serious issues (manual run, no dependency added)
+- `styles.css`: layout, tokens, responsive, focus states, error styling, empty state, Delete button states
+- Pass over headings, labels, landmarks, `aria-describedby`, `role="alert"`, and Delete button accessible names
+- **Exit:** §9.2 steps 8–9 and 15 pass; axe DevTools reports no serious issues (manual run, no dependency added)
 
 ### Checkpoint 5 — Hardening (30 min)
 
-- XSS probe (§9.2 step 6), corrupt-payload probe (step 7), disabled-storage probe (step 10)
+- XSS probe (§9.2 step 6), corrupt-payload probe (step 7), disabled-storage probe (step 10), delete-and-reload probe (step 13)
 - CSP check: no console CSP violations on load
 - Re-run suite; record results
 - **Exit:** definition of done met
 
 ### 10.1 Definition of Done
 
-- FR-1 … FR-12 satisfied and demonstrable
-- Both Gherkin scenarios pass as automated tests
+- FR-1 … FR-17 satisfied and demonstrable
+- All five Gherkin scenarios pass as automated tests
 - `package.json` contains zero dependencies (runtime and dev)
 - `npm start` works from a clean checkout with Node 24 only; `python3 -m http.server` also works
 - No runtime network requests; no `innerHTML` with user data
@@ -419,6 +484,9 @@ Five checkpoints, each independently verifiable. Estimated total: **3–4 hours*
 | --- | --- | --- | --- |
 | Create a new task | FR-1, FR-2, FR-3, FR-4, FR-7, FR-8, FR-11 | `validateTitle`/`createTask` in `task-store.js`; submit path in `app.js` | scenario test 1, validation unit tests, §9.2 steps 2–6 |
 | List all tasks | FR-5, FR-6, FR-9, FR-10, FR-11 | `listTasks` in `task-store.js`; `render` in `app.js`; `storage.js` | scenario test 2, ordering/persistence unit tests, §9.2 steps 1, 3, 4, 7 |
+| Delete a task | FR-13, FR-16, FR-17 | `deleteTask` in `task-store.js`; delegated click path in `app.js` | scenario test 3, deletion unit tests, §9.2 steps 11, 13, 15 |
+| Delete one of several tasks with the same title | FR-7, FR-14, FR-17 | id-based `deleteTask`; `data-id` on Delete buttons | scenario test 4, §9.2 step 12 |
+| Delete the last task | FR-6, FR-15 | `deleteTask` + `render` empty state | scenario test 5, §9.2 step 14 |
 
 ---
 
@@ -430,6 +498,8 @@ Five checkpoints, each independently verifiable. Estimated total: **3–4 hours*
 | `localStorage` disabled or full | Create fails silently | Explicit `try/catch` with visible warning; in-memory list still works (FR-10, §6.2) |
 | Corrupt or hand-edited payload | Crash or data wipe | Read-time validation; warn, do not overwrite (FR-10) |
 | XSS via title | Script execution | `textContent` only, no `innerHTML`, CSP `script-src 'self'` |
+| Deleting by title would remove every duplicate | Two or more tasks lost | `deleteTask` matches on unique `id`; Delete buttons carry `data-id` (FR-13, FR-14) |
+| Accidental deletion with no undo | User loses a task | Per-row control only, no bulk delete; undo is deferred to future work (§13) |
 | `file://` usage | Modules blocked, blank page | Dev static server; documented in §8.2 |
 | Scope creep toward "manage" | Missed deadline | Non-goals in §1.2; store API kept small on purpose |
 | Unbounded task count | Slow render at thousands of tasks | Out of scope; render is O(n) and acceptable to a few thousand |
@@ -438,7 +508,8 @@ Five checkpoints, each independently verifiable. Estimated total: **3–4 hours*
 
 ## 13. Future Work (deferred)
 
-- Complete/uncomplete, edit, delete tasks (would add `updateTask`/`deleteTask` to the store)
+- Complete/uncomplete and edit tasks (would add `updateTask` to the store)
+- Undo for deletions, bulk delete, and a confirmation step for destructive actions
 - Sorting and filtering controls
 - Import/export JSON, or `IndexedDB` for larger datasets
 - Optional Playwright end-to-end suite for the DOM layer
