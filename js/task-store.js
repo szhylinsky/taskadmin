@@ -108,6 +108,33 @@ export function createTask(storage, rawTitle, now) {
 }
 
 /**
+ * Removes the task with the given id and persists the remaining tasks.
+ * Matching is by id only, so duplicate titles are unaffected beyond the selected row.
+ * @param {{ read: () => string | null, write: (value: string) => void }} storage
+ * @param {string} id
+ * @returns {{ removed: boolean, tasks: Array<{id: string, title: string, createdAt: string}> }}
+ */
+export function deleteTask(storage, id) {
+  const { tasks } = listTasks(storage);
+
+  if (typeof id !== 'string' || id.trim() === '') {
+    return { removed: false, tasks };
+  }
+
+  const index = tasks.findIndex((task) => task.id === id);
+
+  if (index === -1) {
+    return { removed: false, tasks };
+  }
+
+  const remaining = tasks.filter((_, position) => position !== index);
+
+  storage.write(JSON.stringify(remaining));
+
+  return { removed: true, tasks: remaining };
+}
+
+/**
  * Removes every stored task.
  * @param {{ clear: () => void }} storage
  */

@@ -7,6 +7,7 @@ import {
   buildTask,
   clearTasks,
   createTask,
+  deleteTask,
   listTasks,
   validateTitle,
 } from '../js/task-store.js';
@@ -15,16 +16,19 @@ import {
 
 function fakeStorage(initial = null) {
   let value = initial;
+  let writes = 0;
 
   return {
     read: () => value,
     write: (next) => {
       value = next;
+      writes += 1;
     },
     clear: () => {
       value = null;
     },
     dump: () => value,
+    writeCount: () => writes,
   };
 }
 
@@ -75,6 +79,62 @@ test('Scenario 2: List all tasks', () => {
   const titles = tasks.map((task) => task.title);
   assert.ok(titles.includes('Buy groceries'));
   assert.ok(titles.includes('Read a book'));
+});
+
+test('Scenario 3: Delete a task', () => {
+  // Given the user has the following tasks:
+  const storage = fakeStorage();
+  const rows = [
+    { title: 'Buy groceries' },
+    { title: 'Read a book' },
+  ];
+  const ids = new Map();
+
+  for (const row of rows) {
+    ids.set(row.title, createTask(storage, row.title).id);
+  }
+
+  // When the user deletes the task "Buy groceries"
+  const result = deleteTask(storage, ids.get('Buy groceries'));
+
+  // Then the task "Buy groceries" should no longer be in the task list
+  assert.equal(result.removed, true);
+
+  const { tasks, corrupt } = listTasks(storage);
+  assert.equal(corrupt, false);
+  assert.deepEqual(tasks.map((task) => task.title), ['Read a book']);
+  assert.match(storage.dump(), /Read a book/);
+  assert.doesNotMatch(storage.dump(), /Buy groceries/);
+});
+
+test('Scenario 4: Delete one of several tasks with the same title', () => {
+  // Given the user has the following tasks: (two with the same title)
+  const storage = fakeStorage();
+  const first = createTask(storage, 'Buy groceries');
+  const second = createTask(storage, 'Buy groceries');
+
+  // When the user deletes one of the "Buy groceries" tasks
+  const { removed, tasks } = deleteTask(storage, first.id);
+
+  // Then the task list should contain exactly 1 task titled "Buy groceries"
+  assert.equal(removed, true);
+  assert.equal(tasks.length, 1);
+  assert.equal(tasks[0].title, 'Buy groceries');
+  assert.equal(tasks[0].id, second.id);
+});
+
+test('Scenario 5: Delete the last task', () => {
+  // Given the user has the following tasks: (one row)
+  const storage = fakeStorage();
+  const task = createTask(storage, 'Buy groceries');
+
+  // When the user deletes the task "Buy groceries"
+  const result = deleteTask(storage, task.id);
+
+  // Then the user should see 0 tasks
+  assert.equal(result.removed, true);
+  assert.deepEqual(result.tasks, []);
+  assert.deepEqual(listTasks(storage).tasks, []);
 });
 
 /* --------------------------------------------------------------- validation */
@@ -221,6 +281,66 @@ test('listTasks tolerates a missing createdAt by keeping the task', () => {
   assert.equal(tasks[0].createdAt, '');
 });
 
+/* ------------------------------------------------------------------ deletion */
+
+test('deleteTask returns the remaining list without a second read', () => {
+  const storage = fakeStorage();
+  createTask(storage, 'Keep me', at('2026-11-12T08:00:00.000Z'));
+  createTask(storage, 'Remove me', at('2026-11-14T08:00:00.000Z'));
+  const { id } = listTasks(storage).tasks.find(
+    (task) => task.title === 'Remove me',
+  );
+
+  const { removed, tasks } = deleteTask(storage, id);
+
+  assert.equal(removed, true);
+  assert.deepEqual(tasks, listTasks(storage).tasks);
+  assert.deepEqual(
+    tasks.map((task) => task.title),
+    ['Keep me'],
+  );
+});
+
+test('deleteTask is a no-op for a stale id', () => {
+  const storage = fakeStorage();
+  createTask(storage, 'Buy groceries');
+  const writesAfterCreate = storage.writeCount();
+
+  const result = deleteTask(storage, 'not-an-existing-id');
+
+  assert.equal(result.removed, false);
+  assert.deepEqual(
+    result.tasks.map((task) => task.title),
+    ['Buy groceries'],
+  );
+  assert.equal(storage.writeCount(), writesAfterCreate);
+  assert.match(storage.dump(), /Buy groceries/);
+});
+
+test('deleteTask ignores non-string, empty and whitespace-only ids', () => {
+  for (const id of [undefined, null, 42, {}, '', '   ', '\n\t']) {
+    const storage = fakeStorage();
+    createTask(storage, 'Buy groceries');
+    const writesAfterCreate = storage.writeCount();
+
+    const result = deleteTask(storage, id);
+
+    assert.equal(result.removed, false);
+    assert.equal(result.tasks.length, 1);
+    assert.equal(storage.writeCount(), writesAfterCreate);
+  }
+});
+
+test('deleteTask does not overwrite corrupt stored data', () => {
+  const storage = fakeStorage('not json');
+
+  const result = deleteTask(storage, 'some-id');
+
+  assert.equal(result.removed, false);
+  assert.deepEqual(result.tasks, []);
+  assert.equal(storage.dump(), 'not json');
+});
+
 /* -------------------------------------------------------------- persistence */
 
 test('tasks survive a simulated reload', () => {
@@ -232,6 +352,20 @@ test('tasks survive a simulated reload', () => {
   assert.deepEqual(
     listTasks(reloaded).tasks.map((task) => task.title),
     ['Buy groceries'],
+  );
+});
+
+test('a deletion survives a simulated reload', () => {
+  const storage = fakeStorage();
+  const removed = createTask(storage, 'Remove me');
+  createTask(storage, 'Keep me');
+  deleteTask(storage, removed.id);
+
+  const reloaded = fakeStorage(storage.dump());
+
+  assert.deepEqual(
+    listTasks(reloaded).tasks.map((task) => task.title),
+    ['Keep me'],
   );
 });
 

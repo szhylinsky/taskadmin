@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Client-side task list: create and list tasks, stored in localStorage.",
+  "description": "Client-side task list: create, list, and delete tasks, stored in localStorage.",
   "engines": {
     "node": ">=24"
   },
