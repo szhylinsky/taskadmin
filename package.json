@@ -9,6 +9,10 @@
   },
   "scripts": {
     "start": "node scripts/serve.js",
-    "test": "node --test"
+    "test": "node --test",
+    "test:e2e": "node node_modules/@playwright/test/cli.js test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.65.1"
   }
 }

@@ -1,6 +1,11 @@
 node_modules/
 .DS_Store
 *.log
+# Playwright artifacts
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
 # GitHub Pages / Jekyll build output
 _site/
 .jekyll-cache/

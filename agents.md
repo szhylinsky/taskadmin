@@ -39,6 +39,15 @@
   - Common types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`
   - Example: `feat(auth): add JWT token refresh`
 
+## Testing
+
+- Unit tests: `npm test` (Node's built-in test runner, `test/*.test.js`).
+- End-to-end tests: `npm run test:e2e` (Playwright, `e2e/*.spec.js`).
+  - Playwright config starts the app automatically at `http://127.0.0.1:3000` via `npm start`.
+  - First run needs the browser binary: `node node_modules/@playwright/test/cli.js install chromium`.
+  - Tests start from a clean `localStorage` state on every test.
+  - Because the working directory is on a `vfat` mount, npm dependencies are installed with `--no-bin-links`; Playwright is invoked through `node node_modules/@playwright/test/cli.js` rather than a `.bin` symlink.
+
 ## Notes for agents
 
 - Use `apt` for OS-level dependencies; use `npm` for Node packages and `pip` for Python packages.
