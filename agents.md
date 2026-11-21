@@ -32,6 +32,13 @@
 - **C/C++:** `gcc`, `make`
 - **Containers:** `docker`
 
+## Git conventions
+
+- Use [Conventional Commits](https://www.conventionalcommits.org/) for all commit messages.
+  - Format: `<type>[optional scope]: <description>`
+  - Common types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`
+  - Example: `feat(auth): add JWT token refresh`
+
 ## Notes for agents
 
 - Use `apt` for OS-level dependencies; use `npm` for Node packages and `pip` for Python packages.
